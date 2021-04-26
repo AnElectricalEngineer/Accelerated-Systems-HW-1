@@ -4,30 +4,25 @@
 #define IMG_SIZE IMG_WIDTH*IMG_HEIGHT
 
 __device__ void prefix_sum(int arr[], int arr_size) {
-//    /* using Kogge-Stone algorithm */    /* assuming num of threads >= arr_size */    int tid = threadIdx.x;    int increment;    for(int stride = 1; stride < arr_size; stride *=2){        if(tid < arr_size && tid >= stride){            increment = arr[tid - stride];        }        __syncthreads();        if(tid < arr_size && tid >= stride){            arr[tid] += increment;        }        __syncthreads();    }    return; // TODO: verify if support of arr_size > num_of_threads is needed}
-
     int threadID = threadIdx.x;
     int offset = 1;
-
+    int last = arr[arr_size-1];
     for(int level = arr_size / 2; level > 0; level /= 2)
     {
-    	__syncthreads(); //TODO change order later
     	if(threadID < level)
     	{
-
-        	printf("%d %d\n", offset * (2 * threadID + 2) - 1, offset * (2 * threadID + 1) - 1);
     		arr[offset * (2 * threadID + 2) - 1] += arr[offset * (2 * threadID + 1) - 1];
     	}
     	offset *= 2;
+    	__syncthreads(); 
     }
     if(threadID == 0)
     {
     	arr[arr_size - 1] = 0;
     }
-
     for(int level = 1; level < arr_size; level *= 2)
     {
-    	offset *= 2;
+    	offset /= 2;
     	__syncthreads();
     	if(threadID < level)
     	{
@@ -36,8 +31,14 @@ __device__ void prefix_sum(int arr[], int arr_size) {
     		arr[offset * (2 * threadID + 2) - 1] += temp;
     	}
     }
+	__syncthreads(); 
+    if(threadID == 0){
+        for(int i=0; i<arr_size-1;i++){
+        	arr[i]=arr[i+1];
+        }
+        arr[arr_size-1]= arr[arr_size-1]+last;
+    }
 	return;
-
 }
 
 __global__ void process_image_kernel(uchar *all_in, uchar *all_out) {
