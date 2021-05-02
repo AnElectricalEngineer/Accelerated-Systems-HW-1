@@ -1,5 +1,6 @@
 #include "ex1.h"
 
+
 #define HIST_LENGTH 256
 #define IMG_SIZE IMG_WIDTH*IMG_HEIGHT
 
@@ -41,7 +42,8 @@ __device__ void prefix_sum(int arr[], int arr_size) {
 	return;
 }
 
-__global__ void process_image_kernel(uchar *all_in, uchar *all_out) {
+//serial 
+/*__global__ void process_image_kernel(uchar *all_in, uchar *all_out) {
     __shared__ int hist[HIST_LENGTH];
 
     int threadID = threadIdx.x;
@@ -76,8 +78,47 @@ __global__ void process_image_kernel(uchar *all_in, uchar *all_out) {
         	all_out[i] = hist[all_in[i]];
         }
 	return;
-}
+}*/
 
+
+//block
+__global__ void process_image_kernel(uchar *all_in, uchar *all_out) {
+    __shared__ int hist[HIST_LENGTH];
+
+    int threadID  =  threadIdx.x;
+    int blockID   =  blockIdx.x;
+    int blockSize =  blockDim.x;
+
+    if(threadID < HIST_LENGTH)
+    {
+    	hist[threadID] = 0;
+    }
+    __syncthreads();
+    //	Create the histogram
+    for(int i = threadID; i < IMG_SIZE; i += blockSize)
+    {
+    	atomicAdd(&hist[all_in[i + blockID*IMG_SIZE]], 1);
+    }
+    __syncthreads();
+
+    //	Create the CDF
+    prefix_sum(hist, HIST_LENGTH);
+    __syncthreads();
+
+    //	Create the map
+    if(threadID < HIST_LENGTH)
+    {
+        hist[threadID] = (HIST_LENGTH / N_COLORS) * (int)(N_COLORS * (float)hist[threadID] / (IMG_SIZE));
+    }
+    __syncthreads();
+
+    //	Compute the new image
+    for(int i = threadID; i < IMG_SIZE; i += blockSize)
+        {
+        	all_out[i + blockID*IMG_SIZE] = hist[all_in[i + blockID*IMG_SIZE]];
+        }
+	return;
+}
 /* Task serial context struct with necessary CPU / GPU pointers to process a single image */
 struct task_serial_context {
     uchar *all_in, *all_out;
@@ -120,7 +161,7 @@ void task_serial_free(struct task_serial_context *context)
 
 /* Bulk GPU context struct with necessary CPU / GPU pointers to process all the images */
 struct gpu_bulk_context {
-    // TODO define bulk-GPU memory buffers
+	uchar *all_in, *all_out;
 };
 
 /* Allocate GPU memory for all the input and output images.
@@ -130,7 +171,8 @@ struct gpu_bulk_context *gpu_bulk_init()
 {
     auto context = new gpu_bulk_context;
 
-    //TODO: allocate GPU memory for a all input images and all output images
+    CUDA_CHECK(cudaMalloc((void**)&context->all_in,  N_IMAGES*IMG_SIZE*sizeof(uchar)));
+    CUDA_CHECK(cudaMalloc((void**)&context->all_out, N_IMAGES*IMG_SIZE*sizeof(uchar)));
 
     return context;
 }
@@ -139,15 +181,17 @@ struct gpu_bulk_context *gpu_bulk_init()
  * provided output host array */
 void gpu_bulk_process(struct gpu_bulk_context *context, uchar *images_in, uchar *images_out)
 {
-    //TODO: copy all input images from images_in to the GPU memory you allocated
-    //TODO: invoke a kernel with N_IMAGES threadblocks, each working on a different image
-    //TODO: copy output images from GPU memory to images_out
+	CUDA_CHECK(cudaMemcpy((void*)context->all_in, (void*)(images_in), N_IMAGES*IMG_SIZE*sizeof(uchar), cudaMemcpyHostToDevice));
+	process_image_kernel<<<N_IMAGES, 1024>>>(context->all_in, context->all_out);
+	CUDA_CHECK(cudaDeviceSynchronize());
+	CUDA_CHECK(cudaMemcpy((void*)(images_out), (void*)context->all_out, N_IMAGES*IMG_SIZE*sizeof(uchar), cudaMemcpyDeviceToHost));
 }
 
 /* Release allocated resources for the bulk GPU implementation. */
 void gpu_bulk_free(struct gpu_bulk_context *context)
 {
-    //TODO: free resources allocated in gpu_bulk_init
-
+    CUDA_CHECK(cudaFree((void*)context->all_in));
+    CUDA_CHECK(cudaFree((void*)context->all_out));
     free(context);
 }
+
